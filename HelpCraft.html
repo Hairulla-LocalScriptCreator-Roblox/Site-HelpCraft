@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>HelpCraft: Berry Collector 3D</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #f0f0f0; }
+        canvas { display: block; }
+        
+        /* Crosshair/Aiming Dot */
+        #crosshair {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            width: 8px;
+            height: 8px;
+            margin-top: -4px;
+            margin-left: -4px;
+            background-color: white;
+            border: 1px solid black;
+            border-radius: 50%;
+            z-index: 100;
+        }
+
+        /* Styles for mobile control buttons */
+        #controls {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 10px;
+            z-index: 10;
+        }
+        .control-button {
+            width: 80px;
+            height: 80px;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            border: 2px solid white;
+            border-radius: 50%;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+            touch-action: manipulation;
+            text-align: center;
+        }
+        
+        /* UI for stats and shop */
+        #ui-stats {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background-color: rgba(0, 0, 0, 0.6);
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            z-index: 10;
+        }
+
+        #shop-ui {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.9);
+            color: white;
+            padding: 20px;
+            border: 2px solid white;
+            border-radius: 5px;
+            z-index: 11;
+            display: none;
+            font-family: monospace;
+            text-align: center;
+            line-height: 1.8;
+        }
+        #shop-ui button {
+            background-color: #555;
+            color: white;
+            padding: 10px 15px;
+            border: 1px solid white;
+            border-radius: 3px;
+            cursor: pointer;
+            margin: 5px;
+            font-size: 14px;
+        }
+
+        #teleport-button {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background-color: #007bff;
+            color: white;
+            padding: 10px 15px;
+            border: 2px solid white;
+            border-radius: 5px;
+            cursor: pointer;
+            z-index: 10;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="crosshair"></div>
+
+    <button id="teleport-button">TP to Shop</button>
+
+    <div id="controls">
+        <div class="control-button" id="move-forward">FORWARD ⬆️</div>
+        <div class="control-button" id="move-backward">BACK ⬇️</div>
+        <div class="control-button" id="action-collect">COLLECT</div>
+        <div class="control-button" id="action-sell">SELL BERRIES</div>
+    </div>
+    
+    <div id="ui-stats">
+        BERRIES: <span id="berry-count">0</span><br>
+        COOKIES: <span id="cookie-count">0</span>
+    </div>
+
+    <div id="shop-ui">
+        <h2>UPGRADE SHOP</h2>
+        <p>Your Cookies: <span id="shop-cookie-count">0</span></p>
+        <button id="buy-speed">SPEED (+0.02) - 10 COOKIES</button><br>
+        <button id="buy-radius">RANGE (+0.3) - 15 COOKIES</button><br>
+        <button id="close-shop">Close</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script>
+        // --- 1. INITIALIZATION & SCENE SETUP ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB); // Sky Blue
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: false });
+        
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // --- RAYCASTING SETUP ---
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2(0, 0); // Center of screen
+        let focusedObject = null; // Object currently being aimed at
+        const originalBerryMaterial = new THREE.MeshLambertMaterial({ color: 0x800080 }); // Purple
+        const glowBerryMaterial = new THREE.MeshLambertMaterial({ color: 0xFF00FF }); // Glowing Magenta
+
+        // --- 2. GAME OBJECT CREATION ---
+        
+        function createBlockyCharacter(color) {
+            const group = new THREE.Group();
+            const bodyGeometry = new THREE.BoxGeometry(0.8, 1.6, 0.4);
+            const bodyMaterial = new THREE.MeshLambertMaterial({ color: color });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            group.add(body);
+            const headGeometry = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+            const headMaterial = new THREE.MeshLambertMaterial({ color: color });
+            const head = new THREE.Mesh(headGeometry, headMaterial);
+            head.position.y = 1.2;
+            group.add(head);
+            return group;
+        }
+
+        // 🟢 Player Group & Mesh
+        const playerGroup = new THREE.Group(); 
+        const playerMesh = createBlockyCharacter(0x00FF00); // Green Avatar
+        playerGroup.add(playerMesh);
+        playerGroup.position.set(0, 0.8, 0); 
+        scene.add(playerGroup);
+
+        camera.position.set(0, 1.2, 0); // First-person view (inside the head)
+        playerGroup.add(camera);
+        
+        // ⛰️ Ground
+        const groundGeometry = new THREE.PlaneGeometry(100, 100);
+        groundGeometry.rotateX(-Math.PI / 2); 
+        const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x55AA55 }); // Grass Green
+        const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+        scene.add(ground);
+
+        // 💡 Lights
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(5, 10, 7);
+        scene.add(directionalLight);
+
+        // 🍇 Berries (Purple Cubes)
+        const berryGeometry = new THREE.BoxGeometry(0.4, 0.4, 0.4); 
+        const berries = []; 
+        
+        for (let i = 0; i < 15; i++) {
+            const berry = new THREE.Mesh(berryGeometry, originalBerryMaterial);
+            berry.position.set(
+                Math.floor(Math.random() * 25 - 12) + 0.5, 
+                0.2,                  
+                Math.floor(Math.random() * 25 - 12) + 0.5
+            );
+            // Custom property to identify the object
+            berry.isBerry = true; 
+            scene.add(berry);
+            berries.push(berry);
+        }
+
+        // 🍪 Non-Seller Cookie (Cylinder)
+        const nonSellerGeometry = new THREE.CylinderGeometry(0.5, 0.5, 0.2, 8); 
+        nonSellerGeometry.scale(2, 1, 1); 
+        const nonSellerMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 }); 
+        const nonSellerCookie = new THREE.Mesh(nonSellerGeometry, nonSellerMaterial);
+        nonSellerCookie.position.set(10, 0.1, 10); 
+        scene.add(nonSellerCookie);
+
+        // 👨‍💼 Seller (Brown Blocky Avatar)
+        const seller = createBlockyCharacter(0x8B4513); // Brown Avatar
+        const sellerPosition = new THREE.Vector3(-15, 0.8, 0);
+        seller.position.copy(sellerPosition);
+        scene.add(seller);
+        seller.isSeller = true;
+
+        // --- 3. GAME STATE AND CONTROLS ---
+        
+        let moveSpeed = 0.1; 
+        let rotationSpeed = 0.005; 
+        let collectRadius = 1.5; 
+        const interactionDistance = 3.0; 
+        
+        const controls = { forward: false, backward: false };
+        let berryCount = 0;
+        let cookieCount = 0;
+
+        // --- 4. UI AND INTERACTION LOGIC ---
+
+        // UI Element References
+        const interactButton = document.getElementById('action-interact');
+        const shopUI = document.getElementById('shop-ui');
+        const shopCookieCountSpan = document.getElementById('shop-cookie-count');
+        const teleportButton = document.getElementById('teleport-button');
+
+        // Movement Buttons
+        document.getElementById('move-forward').addEventListener('touchstart', (e) => { e.preventDefault(); controls.forward = true; });
+        document.getElementById('move-forward').addEventListener('touchend', (e) => { e.preventDefault(); controls.forward = false; });
+        document.getElementById('move-backward').addEventListener('touchstart', (e) => { e.preventDefault(); controls.backward = true; });
+        document.getElementById('move-backward').addEventListener('touchend', (e) => { e.preventDefault(); controls.backward = false; });
+        
+        // --- Action Buttons ---
+
+        // COLLECT (Uses Raycasting for aimed object)
+        document.getElementById('action-collect').addEventListener('click', () => {
+            if (focusedObject && focusedObject.isBerry) {
+                // Check distance to aimed berry
+                const distance = playerGroup.position.distanceTo(focusedObject.position);
+                if (distance < collectRadius) {
+                    scene.remove(focusedObject);
+                    berries.splice(berries.indexOf(focusedObject), 1); 
+                    berryCount += 1;
+                    updateUI();
+                    focusedObject = null; // Clear focused object after collection
+                } else {
+                    alert(`Too far! Max range is ${collectRadius.toFixed(1)} units.`);
+                }
+            } else {
+                alert("Aim at a berry to collect!");
+            }
+        });
+
+        // SELL BERRIES (New button)
+        document.getElementById('action-sell').addEventListener('click', () => {
+            const sellRate = 1; // 10 Berries for 1 Cookie
+            if (berryCount >= sellRate) { 
+                const cookiesGained = Math.floor(berryCount / sellRate);
+                berryCount -= (cookiesGained * sellRate);
+                cookieCount += cookiesGained;
+                updateUI();
+                alert(`Sold ${cookiesGained * sellRate} berries for ${cookiesGained} cookies!`);
+            } else {
+                alert(`Need ${sellRate} berries to sell!`);
+            }
+        });
+
+        // TELEPORT (New button)
+        teleportButton.addEventListener('click', () => {
+            playerGroup.position.copy(sellerPosition);
+            playerGroup.position.z += 5; // Move slightly behind the seller
+            playerGroup.position.y = 0.8; 
+            alert("Teleported to Shop!");
+        });
+
+        // Shop Buttons
+        document.getElementById('buy-speed').addEventListener('click', () => {
+            if (cookieCount >= 10) {
+                cookieCount -= 10;
+                moveSpeed += 0.02; 
+                updateUI();
+                shopCookieCountSpan.textContent = cookieCount;
+                alert(`Speed upgraded! New speed: ${moveSpeed.toFixed(2)}`);
+            } else { alert("Not enough cookies!"); }
+        });
+        document.getElementById('buy-radius').addEventListener('click', () => {
+            if (cookieCount >= 15) {
+                cookieCount -= 15;
+                collectRadius += 0.3; 
+                updateUI();
+                shopCookieCountSpan.textContent = cookieCount;
+                alert(`Range upgraded! New range: ${collectRadius.toFixed(1)}`);
+            } else { alert("Not enough cookies!"); }
+        });
+        document.getElementById('close-shop').addEventListener('click', () => { shopUI.style.display = 'none'; });
+
+
+        // Rotation (Swipes)
+        let isTouching = false;
+        let previousTouchX = 0;
+        let previousTouchY = 0;
+        
+        renderer.domElement.addEventListener('touchstart', (event) => {
+            if (event.target.classList.contains('control-button') || event.target.closest('#shop-ui') || event.target.id === 'teleport-button') {
+                isTouching = false; 
+                return; 
+            }
+            isTouching = true;
+            previousTouchX = event.touches[0].clientX;
+            previousTouchY = event.touches[0].clientY;
+            event.preventDefault(); 
+        });
+
+        renderer.domElement.addEventListener('touchmove', (event) => {
+            if (isTouching) {
+                const currentTouchX = event.touches[0].clientX;
+                const currentTouchY = event.touches[0].clientY;
+                const deltaX = currentTouchX - previousTouchX;
+                const deltaY = currentTouchY - previousTouchY;
+                
+                // Horizontal rotation (Player Group)
+                playerGroup.rotation.y -= deltaX * rotationSpeed; 
+                
+                // Vertical rotation (Camera)
+                camera.rotation.x -= deltaY * rotationSpeed; 
+                
+                // Clamp vertical look
+                camera.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, camera.rotation.x));
+                
+                previousTouchX = currentTouchX;
+                previousTouchY = currentTouchY;
+            }
+        });
+
+        renderer.domElement.addEventListener('touchend', () => {
+            isTouching = false;
+        });
+
+        // --- 5. GAME LOOP & RAYCASTING ---
+
+        function raycast() {
+            // Update the raycaster with the camera's current position and direction
+            raycaster.setFromCamera(mouse, camera);
+
+            // Calculate intersections (only berries and seller)
+            const intersects = raycaster.intersectObjects([...berries, seller]);
+
+            // Reset previous focused object's material
+            if (focusedObject) {
+                focusedObject.material = originalBerryMaterial;
+                focusedObject = null;
+            }
+
+            if (intersects.length > 0) {
+                // The first object hit is the target
+                const hit = intersects[0].object;
+                focusedObject = hit;
+
+                if (hit.isBerry) {
+                    // Apply glow material to berry
+                    hit.material = glowBerryMaterial; 
+                } 
+                // We can add seller highlighting here too if needed
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Perform raycasting to check aimed object
+            raycast();
+
+            // 1. Player Movement
+            if (controls.forward) {
+                const direction = new THREE.Vector3(0, 0, 1); 
+                direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), playerGroup.rotation.y); 
+                playerGroup.position.addScaledVector(direction, moveSpeed);
+            }
+            if (controls.backward) {
+                const direction = new THREE.Vector3(0, 0, -1); 
+                direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), playerGroup.rotation.y);
+                playerGroup.position.addScaledVector(direction, moveSpeed);
+            }
+            
+            playerGroup.position.y = 0.8; // Lock Y axis
+
+            // 2. Interaction check (Show/Hide Shop UI)
+            const distanceToSeller = playerGroup.position.distanceTo(seller.position);
+            if (distanceToSeller < interactionDistance) {
+                // If close enough, show the shop UI immediately (No button needed)
+                if (shopUI.style.display === 'none') {
+                    shopUI.style.display = 'block';
+                    shopCookieCountSpan.textContent = cookieCount;
+                }
+            } else {
+                shopUI.style.display = 'none'; 
+            }
+
+            // 3. Rendering
+            renderer.render(scene, camera);
+        }
+
+        // --- 6. UTILITY ---
+        function updateUI() {
+            document.getElementById('berry-count').textContent = berryCount;
+            document.getElementById('cookie-count').textContent = cookieCount;
+        }
+
+        // --- 7. START GAME ---
+        animate();
+        updateUI();
+        
+        // Window Resize Handler
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+    </script>
+</body>
+</html>
